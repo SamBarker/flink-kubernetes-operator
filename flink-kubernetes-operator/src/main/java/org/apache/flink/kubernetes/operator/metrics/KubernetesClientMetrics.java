@@ -36,7 +36,7 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
 /** Kubernetes client metrics. */
-public class KubernetesClientMetrics implements Interceptor {
+public class KubernetesClientMetrics implements Interceptor, io.fabric8.kubernetes.client.http.Interceptor {
 
     public static final String KUBE_CLIENT_GROUP = "KubeClient";
     public static final String HTTP_REQUEST_GROUP = "HttpRequest";
