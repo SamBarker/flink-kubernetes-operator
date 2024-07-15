@@ -19,6 +19,7 @@
 package org.apache.flink.kubernetes.operator.metrics;
 
 import java.io.IOException;
+import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -32,8 +33,10 @@ import org.apache.flink.metrics.Histogram;
 import org.apache.flink.metrics.MeterView;
 import org.apache.flink.metrics.MetricGroup;
 
+import io.fabric8.kubernetes.client.http.AsyncBody;
 import io.fabric8.kubernetes.client.http.BasicBuilder;
 import io.fabric8.kubernetes.client.http.HttpRequest;
+import io.fabric8.kubernetes.client.http.HttpResponse;
 
 import okhttp3.Interceptor;
 import okhttp3.Request;
@@ -143,9 +146,19 @@ public class KubernetesClientMetrics implements Interceptor, io.fabric8.kubernet
         updateRequestMetrics(request);
     }
 
+    @Override
+    public void after(HttpRequest request, HttpResponse<?> response, AsyncBody.Consumer<List<ByteBuffer>> consumer) {
+        updateResponseMetrics(response, 0L);
+    }
+
     @VisibleForTesting
     Counter getRequestCounter() {
         return requestCounter;
+    }
+
+    @VisibleForTesting
+    Counter getResponseCounter() {
+        return responseCounter;
     }
 
     @VisibleForTesting
@@ -169,6 +182,20 @@ public class KubernetesClientMetrics implements Interceptor, io.fabric8.kubernet
     }
 
     private void updateResponseMetrics(Response response, long startTimeNanos) {
+        final long latency = System.nanoTime() - startTimeNanos;
+        if (response != null) {
+            this.responseRateMeter.markEvent();
+            this.responseLatency.update(latency);
+            getMeterViewByResponseCode(response.code()).markEvent();
+            if (this.httpResponseCodeGroupsEnabled) {
+                responseCodeGroupMeters.get(response.code() / 100 - 1).markEvent();
+            }
+        } else {
+            this.requestFailedRateMeter.markEvent();
+        }
+    }
+
+    private void updateResponseMetrics(HttpResponse<?> response, long startTimeNanos) {
         final long latency = System.nanoTime() - startTimeNanos;
         if (response != null) {
             this.responseRateMeter.markEvent();
