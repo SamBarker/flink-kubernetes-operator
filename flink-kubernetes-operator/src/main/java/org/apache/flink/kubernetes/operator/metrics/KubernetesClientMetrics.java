@@ -18,6 +18,13 @@
 
 package org.apache.flink.kubernetes.operator.metrics;
 
+import java.io.IOException;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+
+import org.apache.flink.annotation.VisibleForTesting;
 import org.apache.flink.kubernetes.operator.config.FlinkOperatorConfiguration;
 import org.apache.flink.kubernetes.operator.metrics.OperatorMetricUtils.SynchronizedMeterView;
 import org.apache.flink.metrics.Counter;
@@ -25,15 +32,12 @@ import org.apache.flink.metrics.Histogram;
 import org.apache.flink.metrics.MeterView;
 import org.apache.flink.metrics.MetricGroup;
 
+import io.fabric8.kubernetes.client.http.BasicBuilder;
+import io.fabric8.kubernetes.client.http.HttpRequest;
+
 import okhttp3.Interceptor;
 import okhttp3.Request;
 import okhttp3.Response;
-
-import java.io.IOException;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
 
 /** Kubernetes client metrics. */
 public class KubernetesClientMetrics implements Interceptor, io.fabric8.kubernetes.client.http.Interceptor {
@@ -134,7 +138,32 @@ public class KubernetesClientMetrics implements Interceptor, io.fabric8.kubernet
         }
     }
 
+    @Override
+    public void before(BasicBuilder builder, HttpRequest request, RequestTags tags) {
+        updateRequestMetrics(request);
+    }
+
+    @VisibleForTesting
+    Counter getRequestCounter() {
+        return requestCounter;
+    }
+
+    @VisibleForTesting
+    Counter getRequestMethodCounter(String method) {
+        return requestMethodCounter.get(method);
+    }
+
+    @VisibleForTesting
+    SynchronizedMeterView getRequestRateMeter() {
+        return requestRateMeter;
+    }
+
     private void updateRequestMetrics(Request request) {
+        this.requestRateMeter.markEvent();
+        getCounterByRequestMethod(request.method()).inc();
+    }
+
+    private void updateRequestMetrics(HttpRequest request) {
         this.requestRateMeter.markEvent();
         getCounterByRequestMethod(request.method()).inc();
     }
