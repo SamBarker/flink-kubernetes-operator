@@ -23,7 +23,10 @@ import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
+import java.util.function.LongSupplier;
 
 import org.apache.flink.annotation.VisibleForTesting;
 import org.apache.flink.kubernetes.operator.config.FlinkOperatorConfiguration;
@@ -32,6 +35,8 @@ import org.apache.flink.metrics.Counter;
 import org.apache.flink.metrics.Histogram;
 import org.apache.flink.metrics.MeterView;
 import org.apache.flink.metrics.MetricGroup;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import io.fabric8.kubernetes.client.http.AsyncBody;
 import io.fabric8.kubernetes.client.http.BasicBuilder;
@@ -76,9 +81,19 @@ public class KubernetesClientMetrics implements Interceptor, io.fabric8.kubernet
     private final Map<Integer, SynchronizedMeterView> responseCodeMeters =
             new ConcurrentHashMap<>();
     private final Map<String, Counter> requestMethodCounter = new ConcurrentHashMap<>();
+    private final LongSupplier nanoTimeSource;
+    private final ConcurrentMap<UUID, Long> requestStartTimes;
+
+    private final Logger logger = LoggerFactory.getLogger(KubernetesClientMetrics.class);
 
     public KubernetesClientMetrics(
             MetricGroup parentGroup, FlinkOperatorConfiguration flinkOperatorConfiguration) {
+        this(parentGroup, flinkOperatorConfiguration, System::nanoTime);
+    }
+
+    public KubernetesClientMetrics(
+            MetricGroup parentGroup, FlinkOperatorConfiguration flinkOperatorConfiguration, LongSupplier nanoTimeSource) {
+        this.nanoTimeSource = nanoTimeSource;
         MetricGroup metricGroup = parentGroup.addGroup(KUBE_CLIENT_GROUP);
 
         this.requestMetricGroup = metricGroup.addGroup(HTTP_REQUEST_GROUP);
@@ -125,6 +140,7 @@ public class KubernetesClientMetrics implements Interceptor, io.fabric8.kubernet
                     createMeterViewForMetricsGroup(
                             responseMetricGroup.addGroup(HTTP_RESPONSE_5XX)));
         }
+        this.requestStartTimes = new ConcurrentHashMap<>();
     }
 
     @Override
@@ -132,7 +148,7 @@ public class KubernetesClientMetrics implements Interceptor, io.fabric8.kubernet
         Request request = chain.request();
         updateRequestMetrics(request);
         Response response = null;
-        final long startTime = System.nanoTime();
+        final long startTime = nanoTimeSource.getAsLong();
         try {
             response = chain.proceed(request);
             return response;
@@ -143,12 +159,16 @@ public class KubernetesClientMetrics implements Interceptor, io.fabric8.kubernet
 
     @Override
     public void before(BasicBuilder builder, HttpRequest request, RequestTags tags) {
+        final Long original = requestStartTimes.putIfAbsent(request.id(), nanoTimeSource.getAsLong());
+        if (original != null) {
+            logger.warn("Duplicate request ID's detected. Latency will only be tracked for the earliest");
+        }
         updateRequestMetrics(request);
     }
 
     @Override
     public void after(HttpRequest request, HttpResponse<?> response, AsyncBody.Consumer<List<ByteBuffer>> consumer) {
-        updateResponseMetrics(response, 0L);
+        updateResponseMetrics(response, requestStartTimes.getOrDefault(request.id(), 0L));
     }
 
     @VisibleForTesting
@@ -181,6 +201,11 @@ public class KubernetesClientMetrics implements Interceptor, io.fabric8.kubernet
         return responseCodeGroupMeters;
     }
 
+    @VisibleForTesting
+    Histogram getResponseLatency() {
+        return responseLatency;
+    }
+
     private void updateRequestMetrics(Request request) {
         this.requestRateMeter.markEvent();
         getCounterByRequestMethod(request.method()).inc();
@@ -192,7 +217,7 @@ public class KubernetesClientMetrics implements Interceptor, io.fabric8.kubernet
     }
 
     private void updateResponseMetrics(Response response, long startTimeNanos) {
-        final long latency = System.nanoTime() - startTimeNanos;
+        final long latency = nanoTimeSource.getAsLong() - startTimeNanos;
         if (response != null) {
             this.responseRateMeter.markEvent();
             this.responseLatency.update(latency);
@@ -206,7 +231,7 @@ public class KubernetesClientMetrics implements Interceptor, io.fabric8.kubernet
     }
 
     private void updateResponseMetrics(HttpResponse<?> response, long startTimeNanos) {
-        final long latency = System.nanoTime() - startTimeNanos;
+        final long latency = nanoTimeSource.getAsLong() - startTimeNanos;
         if (response != null) {
             this.responseRateMeter.markEvent();
             this.responseLatency.update(latency);

@@ -9,7 +9,10 @@ import java.util.stream.Stream;
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.kubernetes.operator.config.FlinkOperatorConfiguration;
 import org.apache.flink.metrics.Counter;
+import org.apache.flink.metrics.Histogram;
+import org.apache.flink.metrics.HistogramStatistics;
 import org.apache.flink.runtime.metrics.util.TestingMetricRegistry;
+import org.assertj.core.api.InstanceOfAssertFactories;
 import org.assertj.core.data.Offset;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -23,6 +26,7 @@ import io.fabric8.kubernetes.client.http.Interceptor;
 import io.fabric8.kubernetes.client.http.StandardHttpRequest;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assumptions.assumeThat;
 import static org.assertj.core.api.InstanceOfAssertFactories.DOUBLE;
 
 class KubernetesClientMetricsFabric8InterceptorTest {
@@ -34,14 +38,13 @@ class KubernetesClientMetricsFabric8InterceptorTest {
     private KubernetesClientMetrics kubernetesClientMetrics;
     private StandardHttpRequest.Builder builder;
     private Interceptor.RequestTags emptyTags;
-    private KubernetesOperatorMetricGroup metricGroup;
     private Configuration operatorConfig;
     private TestingMetricRegistry registry;
 
     @BeforeEach
     void setUp() {
         registry = TestingMetricRegistry.builder().build();
-        metricGroup = KubernetesOperatorMetricGroup.create(
+        KubernetesOperatorMetricGroup metricGroup = KubernetesOperatorMetricGroup.create(
                 registry, new Configuration(), NAMESPACE, NAME, HOST);
         operatorConfig = new Configuration();
         operatorConfig.set(KubernetesOperatorMetricOptions
@@ -198,6 +201,32 @@ class KubernetesClientMetricsFabric8InterceptorTest {
 
         // Then
         assertThat(kubernetesClientMetrics.getResponseCodeGroupMeters()).isEmpty();
+    }
+
+    @Test
+    void shouldTrackRequestLatency() {
+        // Given
+        long[] currentTime = { 0L };
+        kubernetesClientMetrics = new KubernetesClientMetrics(KubernetesOperatorMetricGroup.create(
+                registry, new Configuration(), NAMESPACE, NAME, HOST), FlinkOperatorConfiguration.fromConfiguration(operatorConfig),
+                () -> currentTime[0]);
+        final HttpRequest postRequest = builder.post("application/json", "{}").uri("/random").build();
+        kubernetesClientMetrics.before(builder, postRequest, emptyTags);
+        final Histogram responseLatency = kubernetesClientMetrics.getResponseLatency();
+        assumeThat(responseLatency).extracting(Histogram::getCount).isEqualTo(0L);
+        currentTime[0] += 1000L;
+
+        // When
+
+        kubernetesClientMetrics.after(postRequest, new StubHttpResponse(postRequest, Map.of(), 200), (value, asyncBody) -> {
+        });
+
+        // Then
+        assertThat(responseLatency).extracting(Histogram::getCount).isEqualTo(1L);
+        assertThat(responseLatency).extracting(Histogram::getStatistics)
+                .extracting(HistogramStatistics::getMax)
+                .asInstanceOf(InstanceOfAssertFactories.LONG)
+                .isEqualTo(1000L);
     }
 
     // Technically this is a super set of all valid HTTP status codes
