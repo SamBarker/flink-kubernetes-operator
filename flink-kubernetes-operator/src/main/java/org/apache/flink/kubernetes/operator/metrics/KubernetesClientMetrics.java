@@ -18,6 +18,24 @@
 
 package org.apache.flink.kubernetes.operator.metrics;
 
+import org.apache.flink.annotation.VisibleForTesting;
+import org.apache.flink.kubernetes.operator.config.FlinkOperatorConfiguration;
+import org.apache.flink.kubernetes.operator.metrics.OperatorMetricUtils.SynchronizedMeterView;
+import org.apache.flink.metrics.Counter;
+import org.apache.flink.metrics.Histogram;
+import org.apache.flink.metrics.MeterView;
+import org.apache.flink.metrics.MetricGroup;
+
+import io.fabric8.kubernetes.client.http.AsyncBody;
+import io.fabric8.kubernetes.client.http.BasicBuilder;
+import io.fabric8.kubernetes.client.http.HttpRequest;
+import io.fabric8.kubernetes.client.http.HttpResponse;
+import okhttp3.Interceptor;
+import okhttp3.Request;
+import okhttp3.Response;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
@@ -29,27 +47,9 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.function.LongSupplier;
 
-import org.apache.flink.annotation.VisibleForTesting;
-import org.apache.flink.kubernetes.operator.config.FlinkOperatorConfiguration;
-import org.apache.flink.kubernetes.operator.metrics.OperatorMetricUtils.SynchronizedMeterView;
-import org.apache.flink.metrics.Counter;
-import org.apache.flink.metrics.Histogram;
-import org.apache.flink.metrics.MeterView;
-import org.apache.flink.metrics.MetricGroup;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
-import io.fabric8.kubernetes.client.http.AsyncBody;
-import io.fabric8.kubernetes.client.http.BasicBuilder;
-import io.fabric8.kubernetes.client.http.HttpRequest;
-import io.fabric8.kubernetes.client.http.HttpResponse;
-
-import okhttp3.Interceptor;
-import okhttp3.Request;
-import okhttp3.Response;
-
 /** Kubernetes client metrics. */
-public class KubernetesClientMetrics implements Interceptor, io.fabric8.kubernetes.client.http.Interceptor {
+public class KubernetesClientMetrics
+        implements Interceptor, io.fabric8.kubernetes.client.http.Interceptor {
 
     public static final String KUBE_CLIENT_GROUP = "KubeClient";
     public static final String HTTP_REQUEST_GROUP = "HttpRequest";
@@ -93,7 +93,9 @@ public class KubernetesClientMetrics implements Interceptor, io.fabric8.kubernet
     }
 
     public KubernetesClientMetrics(
-            MetricGroup parentGroup, FlinkOperatorConfiguration flinkOperatorConfiguration, LongSupplier nanoTimeSource) {
+            MetricGroup parentGroup,
+            FlinkOperatorConfiguration flinkOperatorConfiguration,
+            LongSupplier nanoTimeSource) {
         this.nanoTimeSource = nanoTimeSource;
         MetricGroup metricGroup = parentGroup.addGroup(KUBE_CLIENT_GROUP);
 
@@ -160,20 +162,26 @@ public class KubernetesClientMetrics implements Interceptor, io.fabric8.kubernet
 
     @Override
     public void before(BasicBuilder builder, HttpRequest request, RequestTags tags) {
-        final Long original = requestStartTimes.putIfAbsent(request.id(), nanoTimeSource.getAsLong());
+        final Long original =
+                requestStartTimes.putIfAbsent(request.id(), nanoTimeSource.getAsLong());
         if (original != null) {
-            logger.warn("Duplicate request ID's detected. Latency will only be tracked for the earliest");
+            logger.warn(
+                    "Duplicate request ID's detected. Latency will only be tracked for the earliest");
         }
         updateRequestMetrics(request);
     }
 
     @Override
-    public void after(HttpRequest request, HttpResponse<?> response, AsyncBody.Consumer<List<ByteBuffer>> consumer) {
+    public void after(
+            HttpRequest request,
+            HttpResponse<?> response,
+            AsyncBody.Consumer<List<ByteBuffer>> consumer) {
         updateResponseMetrics(response, requestStartTimes.getOrDefault(request.id(), 0L));
     }
 
     @Override
-    public CompletableFuture<Boolean> afterFailure(HttpRequest.Builder builder, HttpResponse<?> response, RequestTags tags) {
+    public CompletableFuture<Boolean> afterFailure(
+            HttpRequest.Builder builder, HttpResponse<?> response, RequestTags tags) {
         this.requestFailedRateMeter.markEvent();
         return CompletableFuture.completedFuture(false);
     }

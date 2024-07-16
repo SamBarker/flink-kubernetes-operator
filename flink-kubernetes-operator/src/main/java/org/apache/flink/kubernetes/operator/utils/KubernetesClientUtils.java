@@ -22,8 +22,6 @@ import org.apache.flink.annotation.VisibleForTesting;
 import org.apache.flink.kubernetes.operator.config.FlinkOperatorConfiguration;
 import org.apache.flink.kubernetes.operator.metrics.KubernetesClientMetrics;
 import org.apache.flink.metrics.MetricGroup;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 import io.fabric8.kubernetes.client.Config;
 import io.fabric8.kubernetes.client.KubernetesClient;
@@ -49,7 +47,10 @@ public class KubernetesClientUtils {
 
         if (operatorConfig.isKubernetesClientMetricsEnabled()) {
             clientBuilder.withHttpClientBuilderConsumer(
-                    httpCLientBuilder -> httpCLientBuilder.addOrReplaceInterceptor(METRICS_INTERCEPTOR_NAME, new KubernetesClientMetrics(metricGroup, operatorConfig)));
+                    httpCLientBuilder ->
+                            httpCLientBuilder.addOrReplaceInterceptor(
+                                    METRICS_INTERCEPTOR_NAME,
+                                    new KubernetesClientMetrics(metricGroup, operatorConfig)));
         }
 
         return clientBuilder.build();
