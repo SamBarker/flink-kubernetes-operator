@@ -24,6 +24,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.function.LongSupplier;
@@ -171,6 +172,12 @@ public class KubernetesClientMetrics implements Interceptor, io.fabric8.kubernet
         updateResponseMetrics(response, requestStartTimes.getOrDefault(request.id(), 0L));
     }
 
+    @Override
+    public CompletableFuture<Boolean> afterFailure(HttpRequest.Builder builder, HttpResponse<?> response, RequestTags tags) {
+        this.requestFailedRateMeter.markEvent();
+        return CompletableFuture.completedFuture(false);
+    }
+
     @VisibleForTesting
     Counter getRequestCounter() {
         return requestCounter;
@@ -204,6 +211,11 @@ public class KubernetesClientMetrics implements Interceptor, io.fabric8.kubernet
     @VisibleForTesting
     Histogram getResponseLatency() {
         return responseLatency;
+    }
+
+    @VisibleForTesting
+    SynchronizedMeterView getRequestFailedRateMeter() {
+        return requestFailedRateMeter;
     }
 
     private void updateRequestMetrics(Request request) {

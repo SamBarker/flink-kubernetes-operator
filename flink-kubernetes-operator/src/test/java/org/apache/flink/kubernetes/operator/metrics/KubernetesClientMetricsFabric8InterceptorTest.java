@@ -217,7 +217,6 @@ class KubernetesClientMetricsFabric8InterceptorTest {
         currentTime[0] += 1000L;
 
         // When
-
         kubernetesClientMetrics.after(postRequest, new StubHttpResponse(postRequest, Map.of(), 200), (value, asyncBody) -> {
         });
 
@@ -227,6 +226,24 @@ class KubernetesClientMetricsFabric8InterceptorTest {
                 .extracting(HistogramStatistics::getMax)
                 .asInstanceOf(InstanceOfAssertFactories.LONG)
                 .isEqualTo(1000L);
+    }
+
+    @Test
+    void shouldTrackFailedRequests() {
+        // Given
+        final HttpRequest postRequest = builder.post("application/json", "{}").uri("/random").build();
+        kubernetesClientMetrics.afterFailure(builder, new StubHttpResponse(postRequest, Map.of(), 500), emptyTags);
+        kubernetesClientMetrics.afterFailure(builder, new StubHttpResponse(postRequest, Map.of(), 500), emptyTags);
+
+        // When
+        kubernetesClientMetrics.afterFailure(builder, new StubHttpResponse(postRequest, Map.of(), 500), emptyTags);
+
+        // Then
+        final OperatorMetricUtils.SynchronizedMeterView requestFailedRateMeter = kubernetesClientMetrics.getRequestFailedRateMeter();
+        assertThat(requestFailedRateMeter).extracting(OperatorMetricUtils.SynchronizedMeterView::getCount).isEqualTo(1L);
+        // MeterView defaults to averaging over 60s, so we expect 1 / 60
+        assertThat(requestFailedRateMeter).extracting(OperatorMetricUtils.SynchronizedMeterView::getRate).asInstanceOf(DOUBLE)
+                .isCloseTo(0.05, Offset.offset(0.0001));
     }
 
     // Technically this is a super set of all valid HTTP status codes
