@@ -171,6 +171,16 @@ public class KubernetesClientMetrics implements Interceptor, io.fabric8.kubernet
         return requestRateMeter;
     }
 
+    @VisibleForTesting
+    SynchronizedMeterView getResponseCodeMeter(int statusCode) {
+        return responseCodeMeters.get(statusCode);
+    }
+
+    @VisibleForTesting
+    List<SynchronizedMeterView> getResponseCodeGroupMeters() {
+        return responseCodeGroupMeters;
+    }
+
     private void updateRequestMetrics(Request request) {
         this.requestRateMeter.markEvent();
         getCounterByRequestMethod(request.method()).inc();
