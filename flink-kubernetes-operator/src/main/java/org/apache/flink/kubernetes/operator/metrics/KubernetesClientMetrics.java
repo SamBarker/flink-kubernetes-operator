@@ -162,8 +162,7 @@ public class KubernetesClientMetrics
 
     @Override
     public void before(BasicBuilder builder, HttpRequest request, RequestTags tags) {
-        final Long original =
-                requestStartTimes.putIfAbsent(request.id(), nanoTimeSource.getAsLong());
+        final Long original = requestStartTimes.put(request.id(), nanoTimeSource.getAsLong());
         if (original != null) {
             logger.warn(
                     "Duplicate request ID's detected. Latency will only be tracked for the earliest");
@@ -184,6 +183,11 @@ public class KubernetesClientMetrics
             HttpRequest.Builder builder, HttpResponse<?> response, RequestTags tags) {
         this.requestFailedRateMeter.markEvent();
         return CompletableFuture.completedFuture(false);
+    }
+
+    @Override
+    public void afterConnectionFailure(HttpRequest request, Throwable failure) {
+        this.requestFailedRateMeter.markEvent();
     }
 
     @VisibleForTesting
