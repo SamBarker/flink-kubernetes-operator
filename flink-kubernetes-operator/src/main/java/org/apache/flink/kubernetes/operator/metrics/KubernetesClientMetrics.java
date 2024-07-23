@@ -38,6 +38,7 @@ import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
@@ -147,7 +148,7 @@ public class KubernetesClientMetrics implements Interceptor {
         final Long original = requestStartTimes.put(request.id(), nanoTimeSource.getAsLong());
         if (original != null) {
             logger.warn(
-                    "Duplicate request ID's detected. Latency will only be tracked for the earliest");
+                    "Duplicate request ID's detected. Latency will only be tracked for the latest");
         }
         updateRequestMetrics(request);
     }
@@ -157,7 +158,8 @@ public class KubernetesClientMetrics implements Interceptor {
             HttpRequest request,
             HttpResponse<?> response,
             AsyncBody.Consumer<List<ByteBuffer>> consumer) {
-        updateResponseMetrics(response, requestStartTimes.getOrDefault(request.id(), 0L));
+        trackRequestLatency(request.id());
+        updateResponseMetrics(response);
     }
 
     @Override
@@ -169,6 +171,7 @@ public class KubernetesClientMetrics implements Interceptor {
 
     @Override
     public void afterConnectionFailure(HttpRequest request, Throwable failure) {
+        trackRequestLatency(request.id());
         this.requestFailedRateMeter.markEvent();
     }
 
@@ -217,11 +220,9 @@ public class KubernetesClientMetrics implements Interceptor {
         getCounterByRequestMethod(request.method()).inc();
     }
 
-    private void updateResponseMetrics(HttpResponse<?> response, long startTimeNanos) {
-        final long latency = nanoTimeSource.getAsLong() - startTimeNanos;
+    private void updateResponseMetrics(HttpResponse<?> response) {
         if (response != null) {
             this.responseRateMeter.markEvent();
-            this.responseLatency.update(latency);
             getMeterViewByResponseCode(response.code()).markEvent();
             if (this.httpResponseCodeGroupsEnabled) {
                 responseCodeGroupMeters.get(response.code() / 100 - 1).markEvent();
@@ -229,6 +230,13 @@ public class KubernetesClientMetrics implements Interceptor {
         } else {
             this.requestFailedRateMeter.markEvent();
         }
+    }
+
+    private void trackRequestLatency(UUID requestId) {
+        final Optional<Long> computedLatency = Optional.ofNullable(requestStartTimes.computeIfPresent(requestId, (uuid, startTime) -> nanoTimeSource.getAsLong() - startTime));
+        final long latency = computedLatency.orElse(0L);
+        this.responseLatency.update(latency);
+        requestStartTimes.remove(requestId);
     }
 
     private Counter getCounterByRequestMethod(String method) {

@@ -138,7 +138,7 @@ class KubernetesClientMetricsFabric8InterceptorTest {
     }
 
     @Test
-    void shouldMarkRequest() {
+    void shouldTrackRequestRate() {
         // Given
         final HttpRequest postRequest =
                 builder.patch("application/json", "{}").uri("/random").build();
@@ -317,6 +317,37 @@ class KubernetesClientMetricsFabric8InterceptorTest {
     }
 
     @Test
+    void shouldTrackRequestLatencyForFailedConnection() {
+        // Given
+        long[] currentTime = {0L};
+        kubernetesClientMetrics =
+                new KubernetesClientMetrics(
+                        KubernetesOperatorMetricGroup.create(
+                                registry, new Configuration(), NAMESPACE, NAME, HOST),
+                        FlinkOperatorConfiguration.fromConfiguration(operatorConfig),
+                        () -> currentTime[0]);
+        final HttpRequest postRequest =
+                builder.post("application/json", "{}").uri("/random").build();
+        kubernetesClientMetrics.before(builder, postRequest, emptyTags);
+        final Histogram responseLatency = kubernetesClientMetrics.getResponseLatency();
+        assumeThat(responseLatency).extracting(Histogram::getCount).isEqualTo(0L);
+        currentTime[0] += 1000L;
+
+        // When
+        kubernetesClientMetrics.afterConnectionFailure(
+                postRequest,
+                new RuntimeException("kaboom"));
+
+        // Then
+        assertThat(responseLatency).extracting(Histogram::getCount).isEqualTo(1L);
+        assertThat(responseLatency)
+                .extracting(Histogram::getStatistics)
+                .extracting(HistogramStatistics::getMax)
+                .asInstanceOf(InstanceOfAssertFactories.LONG)
+                .isEqualTo(1000L);
+    }
+
+    @Test
     void shouldTrackFailedRequests() {
         // Given
         final HttpRequest postRequest =
@@ -325,18 +356,19 @@ class KubernetesClientMetricsFabric8InterceptorTest {
                 builder, new StubHttpResponse(postRequest, Map.of(), 500), emptyTags);
         kubernetesClientMetrics.afterFailure(
                 builder, new StubHttpResponse(postRequest, Map.of(), 500), emptyTags);
-
-        // When
         kubernetesClientMetrics.afterFailure(
                 builder, new StubHttpResponse(postRequest, Map.of(), 500), emptyTags);
-
-        // Then
         final OperatorMetricUtils.SynchronizedMeterView requestFailedRateMeter =
                 kubernetesClientMetrics.getRequestFailedRateMeter();
+
+        // When
+        requestFailedRateMeter.update();
+
+        // Then
         assertThat(requestFailedRateMeter)
                 .extracting(OperatorMetricUtils.SynchronizedMeterView::getCount)
-                .isEqualTo(1L);
-        // MeterView defaults to averaging over 60s, so we expect 1 / 60
+                .isEqualTo(3L);
+        // MeterView defaults to averaging over 60s, so we expect 3 / 60
         assertThat(requestFailedRateMeter)
                 .extracting(OperatorMetricUtils.SynchronizedMeterView::getRate)
                 .asInstanceOf(DOUBLE)
